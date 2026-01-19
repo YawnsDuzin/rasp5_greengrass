@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Model files (too large for git)
+*.pt
+*.pth
+*.onnx
+*.tflite
+models/*.pt
+models/*.pth
+
+# AWS credentials (NEVER commit these!)
+*.pem
+*.key
+credentials.json
+.aws/
+
+# Greengrass artifacts
+greengrass-nucleus-latest.zip
+GreengrassInstaller/
+
+# Build artifacts
+build/
+*.zip
+
+# Local config with secrets
+configs/config.local.yaml
+configs/secrets.yaml
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
