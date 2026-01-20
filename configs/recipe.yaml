@@ -1,0 +1,153 @@
+---
+# AWS IoT Greengrass V2 Component Recipe
+# PPE Detector Component
+
+RecipeFormatVersion: "2020-01-25"
+
+# 컴포넌트 기본 정보
+ComponentName: com.example.PPEDetector
+ComponentVersion: "1.0.0"
+ComponentDescription: |
+  PPE (Personal Protective Equipment) Detection Component
+  라즈베리파이5에서 RTSP 카메라 스트림을 분석하여 개인보호장비 착용 여부를 감지합니다.
+
+  주요 기능:
+  - RTSP 스트림 실시간 수신
+  - YOLOv8 기반 PPE 인식 (안전모, 안전 조끼 등)
+  - PPE 미착용 시 AWS IoT Core로 알림 발송
+
+ComponentPublisher: YourCompany
+ComponentType: aws.greengrass.generic
+
+# 컴포넌트 의존성
+ComponentDependencies:
+  # Greengrass Nucleus (필수)
+  aws.greengrass.Nucleus:
+    VersionRequirement: ">=2.9.0"
+    DependencyType: HARD
+
+  # MQTT 브릿지 (IoT Core로 메시지 전송)
+  aws.greengrass.clientdevices.mqtt.Bridge:
+    VersionRequirement: ">=2.2.0"
+    DependencyType: SOFT
+
+  # 토큰 교환 서비스 (AWS API 접근)
+  aws.greengrass.TokenExchangeService:
+    VersionRequirement: ">=2.0.0"
+    DependencyType: HARD
+
+# 플랫폼별 설정
+Manifests:
+  # Linux ARM64 (라즈베리파이5)
+  - Platform:
+      os: linux
+      architecture: aarch64
+
+    # 라이프사이클 스크립트
+    Lifecycle:
+      # 설치 단계
+      Install:
+        RequiresPrivilege: false
+        Timeout: 600  # 10분 (패키지 설치 시간 고려)
+        Script: |
+          #!/bin/bash
+          set -e
+
+          echo "Installing PPE Detector dependencies..."
+
+          # Python 가상 환경 설정
+          VENV_PATH="{artifacts:decompressedPath}/ppe-detector/venv"
+
+          if [ ! -d "$VENV_PATH" ]; then
+            python3 -m venv "$VENV_PATH"
+          fi
+
+          source "$VENV_PATH/bin/activate"
+
+          # 의존성 설치
+          pip install --upgrade pip
+          pip install -r "{artifacts:decompressedPath}/ppe-detector/requirements.txt"
+
+          echo "Installation completed"
+
+      # 시작 단계
+      Startup:
+        RequiresPrivilege: false
+        Timeout: 30
+        Script: |
+          echo "PPE Detector starting up..."
+
+      # 실행 단계 (메인 프로세스)
+      Run:
+        RequiresPrivilege: false
+        Timeout: -1  # 무한 실행
+        Script: |
+          #!/bin/bash
+          set -e
+
+          # 가상 환경 활성화
+          source "{artifacts:decompressedPath}/ppe-detector/venv/bin/activate"
+
+          # 환경 변수 설정 (Configuration에서 가져옴)
+          export RTSP_URL="{configuration:/rtspUrl}"
+          export CONFIDENCE_THRESHOLD="{configuration:/confidenceThreshold}"
+          export ALERT_TOPIC="{configuration:/alertTopic}"
+          export STATUS_TOPIC="{configuration:/statusTopic}"
+          export DETECTION_TOPIC="{configuration:/detectionTopic}"
+          export REQUIRED_PPE="{configuration:/requiredPpe}"
+          export PROCESS_INTERVAL="{configuration:/processInterval}"
+          export MODEL_PATH="{artifacts:decompressedPath}/ppe-detector/models/ppe_yolov8n.pt"
+
+          # 메인 실행
+          python3 "{artifacts:decompressedPath}/ppe-detector/main.py"
+
+      # 종료 단계
+      Shutdown:
+        RequiresPrivilege: false
+        Timeout: 30
+        Script: |
+          echo "PPE Detector shutting down..."
+          # SIGTERM은 자동으로 전송됨
+
+    # 아티팩트 (소스 코드 및 모델)
+    Artifacts:
+      # 컴포넌트 소스 코드
+      - Uri: s3://YOUR_BUCKET_NAME/components/com.example.PPEDetector/1.0.0/ppe-detector.zip
+        Unarchive: ZIP
+        Permission:
+          Read: OWNER
+          Execute: OWNER
+
+# 컴포넌트 설정 (배포 시 오버라이드 가능)
+ComponentConfiguration:
+  DefaultConfiguration:
+    # RTSP 카메라 설정
+    rtspUrl: "rtsp://admin:password@192.168.1.100:554/stream1"
+
+    # 모델 설정
+    confidenceThreshold: "0.5"
+
+    # MQTT 토픽 설정
+    alertTopic: "ppe/alerts"
+    statusTopic: "ppe/status"
+    detectionTopic: "ppe/detections"
+
+    # PPE 규정 설정
+    requiredPpe: "hardhat,safety_vest"
+
+    # 처리 설정
+    processInterval: "1.0"
+
+    # 접근 제어 정책
+    accessControl:
+      aws.greengrass.ipc.mqttproxy:
+        "com.example.PPEDetector:mqttproxy:1":
+          policyDescription: "PPE Detector MQTT 발행 권한"
+          operations:
+            - "aws.greengrass#PublishToIoTCore"
+          resources:
+            - "ppe/*"
+            - "$aws/things/{iot:thingName}/shadow/*"
+
+# 라이선스 정보
+ComponentLicense: MIT

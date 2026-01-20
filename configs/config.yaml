@@ -1,0 +1,72 @@
+# PPE Detector 설정 파일
+# 이 파일을 환경에 맞게 수정하세요
+
+# AWS 설정
+aws:
+  region: "ap-northeast-2"           # AWS 리전 (서울)
+  s3_bucket: "YOUR_BUCKET_NAME"      # S3 버킷 이름 (실제 버킷명으로 변경)
+  thing_name: "RaspberryPi5-PPE"     # IoT Thing 이름
+  thing_group: "PPEDetectorGroup"    # Thing 그룹 이름
+
+# RTSP 카메라 설정
+rtsp:
+  # 카메라 URL (실제 카메라 주소로 변경)
+  # 형식: rtsp://[username]:[password]@[ip]:[port]/[path]
+  url: "rtsp://admin:password@192.168.1.100:554/stream1"
+
+  # 연결 설정
+  timeout: 30                        # 연결 타임아웃 (초)
+  reconnect_delay: 5                 # 재연결 대기 시간 (초)
+  buffer_size: 2                     # 프레임 버퍼 크기
+
+# PPE 인식 모델 설정
+model:
+  # 모델 파일 경로 (로컬 경로 또는 S3 URI)
+  path: "/opt/ppe-detector/models/ppe_yolov8n.pt"
+
+  # 감지 설정
+  confidence_threshold: 0.5          # 최소 신뢰도 (0.0 ~ 1.0)
+  iou_threshold: 0.45                # NMS IoU 임계값
+  device: "cpu"                      # 추론 장치 (cpu 또는 cuda)
+
+# 처리 설정
+processing:
+  interval: 1.0                      # 처리 간격 (초)
+  skip_frames: 5                     # 프레임 건너뛰기 (성능 최적화)
+  resize_width: 640                  # 입력 이미지 너비 (null = 원본 크기)
+  resize_height: 480                 # 입력 이미지 높이
+
+# PPE 규정 설정
+ppe:
+  # 필수 보호장비 목록
+  required:
+    - "hardhat"                      # 안전모
+    - "safety_vest"                  # 안전 조끼
+    # - "safety_glasses"             # 보안경 (필요시 주석 해제)
+    # - "gloves"                     # 장갑
+    # - "mask"                       # 마스크
+
+  # 알림 설정
+  alert_cooldown: 30                 # 동일 알림 최소 간격 (초)
+
+# MQTT 토픽 설정
+mqtt:
+  alert_topic: "ppe/alerts"          # PPE 미착용 알림 토픽
+  status_topic: "ppe/status"         # 디바이스 상태 토픽
+  detection_topic: "ppe/detections"  # 감지 결과 토픽
+
+  # QoS 설정
+  qos: 1                             # 0 = at most once, 1 = at least once
+
+# 로깅 설정
+logging:
+  level: "INFO"                      # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "/opt/ppe-detector/logs/ppe-detector.log"
+  max_size_mb: 10                    # 로그 파일 최대 크기
+  backup_count: 5                    # 백업 파일 수
+
+# 성능 모니터링
+monitoring:
+  enabled: true
+  stats_interval: 60                 # 통계 보고 간격 (초)
