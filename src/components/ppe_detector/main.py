@@ -70,10 +70,10 @@ class PPEDetectorComponent:
             'rtsp_timeout': int(os.environ.get('RTSP_TIMEOUT', '30')),
             'rtsp_reconnect_delay': int(os.environ.get('RTSP_RECONNECT_DELAY', '5')),
 
-            # 모델 설정
-            'model_path': os.environ.get('MODEL_PATH', '/opt/ppe-detector/models/ppe_yolov8n.pt'),
+            # 모델 설정 (OpenCV DNN + ONNX)
+            'model_path': os.environ.get('MODEL_PATH', '/opt/ppe-detector/models/yolov8n.onnx'),
             'confidence_threshold': float(os.environ.get('CONFIDENCE_THRESHOLD', '0.5')),
-            'device': os.environ.get('DEVICE', 'cpu'),  # 'cpu' 또는 'cuda'
+            'use_cuda': os.environ.get('USE_CUDA', 'false').lower() == 'true',  # GPU 사용 여부
 
             # 처리 설정
             'process_interval': float(os.environ.get('PROCESS_INTERVAL', '1.0')),  # 초
@@ -111,11 +111,11 @@ class PPEDetectorComponent:
             reconnect_delay=self.config['rtsp_reconnect_delay']
         )
 
-        # PPE 감지 모델 초기화
+        # PPE 감지 모델 초기화 (OpenCV DNN + ONNX)
         self.ppe_detector = PPEDetector(
             model_path=self.config['model_path'],
             confidence_threshold=self.config['confidence_threshold'],
-            device=self.config['device']
+            use_cuda=self.config['use_cuda']
         )
 
         # MQTT 퍼블리셔 초기화

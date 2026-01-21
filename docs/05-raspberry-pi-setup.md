@@ -574,23 +574,26 @@ source /opt/ppe-detector/venv/bin/activate
 pip install opencv-python-headless
 ```
 
-### 7.3 PyTorch 및 YOLOv8 설치
+### 7.3 Python 의존성 설치 (OpenCV DNN + ONNX)
+
+> **중요**: 라즈베리파이 Bookworm OS (Python 3.11)에서는 PyTorch가 지원되지 않습니다.
+> 대신 OpenCV DNN 백엔드와 ONNX 모델을 사용합니다.
 
 ```bash
 # 가상 환경 활성화 (이미 되어있으면 스킵)
 source /opt/ppe-detector/venv/bin/activate
 
-# PyTorch 설치 (라즈베리파이5 arm64용)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# OpenCV (DNN 백엔드 포함)
+pip install opencv-python-headless>=4.8.0
 
-# Ultralytics (YOLOv8)
-pip install ultralytics
+# NumPy
+pip install numpy>=1.24.0
 
 # AWS IoT SDK
-pip install awsiotsdk
+pip install awsiotsdk awscrt
 
-# 기타 의존성
-pip install numpy pillow pyyaml
+# 이미지 처리 및 유틸리티
+pip install Pillow PyYAML requests tqdm
 ```
 
 ### 7.4 설치 확인
@@ -600,25 +603,38 @@ source /opt/ppe-detector/venv/bin/activate
 
 python3 << 'EOF'
 import cv2
-import torch
-from ultralytics import YOLO
+import numpy as np
 
 print(f"OpenCV version: {cv2.__version__}")
-print(f"PyTorch version: {torch.__version__}")
-print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"NumPy version: {np.__version__}")
+print(f"OpenCV DNN backends: {cv2.dnn.getAvailableBackends()}")
 print("All dependencies installed successfully!")
 EOF
 ```
 
 예상 출력:
 ```
-OpenCV version: 4.x.x
-PyTorch version: 2.x.x
-CUDA available: False
+OpenCV version: 4.8.x
+NumPy version: 1.24.x
+OpenCV DNN backends: [(Backend.OPENCV, Target.CPU), ...]
 All dependencies installed successfully!
 ```
 
-### 7.5 RTSP 스트림 테스트
+### 7.5 ONNX 모델 다운로드
+
+```bash
+# 모델 디렉토리 생성
+mkdir -p /opt/ppe-detector/models
+
+# 사전 변환된 YOLOv8n ONNX 모델 다운로드
+curl -L https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.onnx \
+    -o /opt/ppe-detector/models/yolov8n.onnx
+
+# 파일 확인
+ls -la /opt/ppe-detector/models/
+```
+
+### 7.6 RTSP 스트림 테스트
 
 ```bash
 # IP 카메라 RTSP 스트림 테스트
@@ -640,7 +656,7 @@ else:
 EOF
 ```
 
-### 7.6 시스템 시작 시 자동 설정
+### 7.7 시스템 시작 시 자동 설정
 
 가상 환경 경로를 Greengrass 컴포넌트에서 사용할 수 있도록 설정:
 
@@ -672,7 +688,7 @@ source /etc/profile.d/ppe-detector.sh
 | 시스템 설정 | SSH, 업데이트, Java 설치 |
 | Greengrass 준비 | 사용자 생성, cgroup 설정 |
 | Greengrass 설치 | 자동 프로비저닝으로 설치 |
-| PPE 환경 | Python, OpenCV, PyTorch, YOLOv8 |
+| PPE 환경 | Python, OpenCV DNN, ONNX |
 
 ---
 
@@ -696,7 +712,7 @@ source /etc/profile.d/ppe-detector.sh
 - [ ] Greengrass V2 설치 완료
 - [ ] AWS 콘솔에서 디바이스 확인
 - [ ] Python 환경 설정 완료
-- [ ] OpenCV, PyTorch, YOLOv8 설치
+- [ ] OpenCV, ONNX 모델 설치
 
 ---
 

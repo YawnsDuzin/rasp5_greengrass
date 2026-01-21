@@ -1,35 +1,38 @@
 # PPE Detector Component - Python Dependencies
-# 라즈베리파이5 (ARM64) 환경용
+# 라즈베리파이5 Bookworm OS (Python 3.11) 호환
+# OpenCV DNN + ONNX 방식 (PyTorch 불필요)
 
-# Core ML Libraries
-ultralytics>=8.0.0          # YOLOv8
-torch>=2.0.0                # PyTorch (CPU 버전)
-torchvision>=0.15.0         # PyTorch Vision
-
-# Computer Vision
-opencv-python-headless>=4.8.0  # OpenCV (GUI 없는 버전)
-numpy>=1.24.0               # NumPy
+# Computer Vision (핵심)
+opencv-python-headless>=4.8.0  # OpenCV DNN 백엔드 포함 (GUI 없는 버전)
+numpy>=1.24.0                  # NumPy 배열 처리
 
 # AWS IoT
-awsiotsdk>=1.19.0           # AWS IoT Device SDK v2
-awscrt>=0.19.0              # AWS Common Runtime
+awsiotsdk>=1.19.0              # AWS IoT Device SDK v2
+awscrt>=0.19.0                 # AWS Common Runtime
 
 # Greengrass IPC (Greengrass 환경에서 자동 설치됨)
-# awsiot-greengrasscoreipc  # 주석: Greengrass 런타임에 포함
+# awsiot-greengrasscoreipc     # 주석: Greengrass 런타임에 포함
 
 # Image Processing
-Pillow>=10.0.0              # 이미지 처리
-imageio>=2.31.0             # 이미지 I/O (선택)
+Pillow>=10.0.0                 # 이미지 처리
 
 # Configuration
-PyYAML>=6.0                 # YAML 설정 파일 파싱
+PyYAML>=6.0                    # YAML 설정 파일 파싱
 
 # Utilities
-requests>=2.31.0            # HTTP 요청 (모델 다운로드용)
-tqdm>=4.65.0                # 진행 표시줄
+requests>=2.31.0               # HTTP 요청 (모델 다운로드용)
+tqdm>=4.65.0                   # 진행 표시줄
 
-# Logging & Monitoring (선택)
-# python-json-logger>=2.0.0  # JSON 로깅
+# ============================================
+# PyTorch/Ultralytics는 사용하지 않음!
+# 라즈베리파이 Bookworm (Python 3.11)에서
+# PyTorch wheel이 제공되지 않아
+# OpenCV DNN + ONNX 방식으로 대체
+# ============================================
+
+# ONNX 모델 변환용 (개발 PC에서만 필요, 라즈베리파이에서는 불필요)
+# ultralytics>=8.0.0           # YOLOv8 모델을 ONNX로 변환할 때만 필요
+# onnx>=1.14.0                 # ONNX 모델 검증용
 
 # Development/Testing (선택)
 # pytest>=7.4.0
