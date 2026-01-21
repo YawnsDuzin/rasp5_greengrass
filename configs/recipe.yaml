@@ -96,7 +96,7 @@ Manifests:
           export DETECTION_TOPIC="{configuration:/detectionTopic}"
           export REQUIRED_PPE="{configuration:/requiredPpe}"
           export PROCESS_INTERVAL="{configuration:/processInterval}"
-          export MODEL_PATH="{artifacts:decompressedPath}/ppe-detector/models/ppe_yolov8n.pt"
+          export MODEL_PATH="{artifacts:decompressedPath}/ppe-detector/models/yolov8n.onnx"
 
           # 메인 실행
           python3 "{artifacts:decompressedPath}/ppe-detector/main.py"

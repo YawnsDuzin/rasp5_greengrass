@@ -67,12 +67,12 @@ case $MODE in
         # 소스 코드 복사
         cp -r "$PROJECT_ROOT/src/components/ppe_detector/"* "$BUILD_DIR/ppe-detector/"
 
-        # 모델 파일 복사 (있으면)
+        # 모델 파일 복사 (ONNX 형식)
         mkdir -p "$BUILD_DIR/ppe-detector/models"
-        if [ -f "$PROJECT_ROOT/models/ppe_yolov8n.pt" ]; then
-            cp "$PROJECT_ROOT/models/ppe_yolov8n.pt" "$BUILD_DIR/ppe-detector/models/"
+        if [ -f "$PROJECT_ROOT/models/yolov8n.onnx" ]; then
+            cp "$PROJECT_ROOT/models/yolov8n.onnx" "$BUILD_DIR/ppe-detector/models/"
         else
-            log_warn "모델 파일이 없습니다. 기본 YOLOv8n 모델이 사용됩니다."
+            log_warn "ONNX 모델 파일이 없습니다. src/models/download_model.py를 실행하세요."
         fi
 
         # 로컬 레시피 생성 (파일 경로 사용)
@@ -108,7 +108,7 @@ Manifests:
         Script: |
           #!/bin/bash
           source "{artifacts:path}/venv/bin/activate"
-          export MODEL_PATH="{artifacts:path}/models/ppe_yolov8n.pt"
+          export MODEL_PATH="{artifacts:path}/models/yolov8n.onnx"
           python3 "{artifacts:path}/main.py"
     Artifacts:
       - Uri: file://$BUILD_DIR/ppe-detector

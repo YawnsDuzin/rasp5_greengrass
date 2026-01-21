@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-PPE Detection Model
-YOLOv8을 사용한 개인보호장비(PPE) 인식 모듈
+PPE Detection Model - OpenCV DNN + ONNX 버전
+PyTorch 없이 OpenCV DNN 백엔드를 사용하여 ONNX 모델로 추론
+라즈베리파이 Bookworm OS (Python 3.11) 호환
 """
 
 import logging
 import os
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
 
 logger = logging.getLogger('PPEDetector')
 
-# PPE 클래스 정의
+# PPE 클래스 정의 (PPE 전용 모델용)
 PPE_CLASSES = {
     0: 'person',
     1: 'hardhat',        # 안전모
@@ -24,6 +25,12 @@ PPE_CLASSES = {
     5: 'safety_glasses', # 보안경
     6: 'gloves',         # 장갑
     7: 'mask',           # 마스크
+}
+
+# COCO 클래스 (기본 YOLOv8 모델용 - 80개 클래스 중 일부)
+COCO_CLASSES = {
+    0: 'person',
+    # ... 나머지 COCO 클래스들
 }
 
 # PPE 클래스 색상 (BGR)
@@ -40,70 +47,263 @@ PPE_COLORS = {
 
 
 class PPEDetector:
-    """YOLOv8 기반 PPE 인식기"""
+    """OpenCV DNN 기반 ONNX 모델 PPE 인식기"""
 
     def __init__(
         self,
         model_path: str = None,
         confidence_threshold: float = 0.5,
         iou_threshold: float = 0.45,
-        device: str = 'cpu',
-        classes: Dict[int, str] = None
+        input_size: Tuple[int, int] = (640, 640),
+        classes: Dict[int, str] = None,
+        use_cuda: bool = False
     ):
         """
         Args:
-            model_path: YOLOv8 모델 파일 경로 (.pt)
+            model_path: ONNX 모델 파일 경로 (.onnx)
             confidence_threshold: 최소 신뢰도 임계값
             iou_threshold: NMS IoU 임계값
-            device: 추론 장치 ('cpu', 'cuda', 'cuda:0')
+            input_size: 모델 입력 크기 (width, height)
             classes: 클래스 ID -> 이름 매핑 딕셔너리
+            use_cuda: CUDA 백엔드 사용 여부 (라즈베리파이에서는 False)
         """
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
-        self.device = device
+        self.input_size = input_size
         self.classes = classes or PPE_CLASSES
+        self.use_cuda = use_cuda
 
-        self.model = None
+        self.net = None
+        self.output_layers = None
         self._load_model()
 
     def _load_model(self):
-        """모델 로드"""
+        """ONNX 모델 로드"""
         try:
-            from ultralytics import YOLO
-
             if self.model_path and os.path.exists(self.model_path):
-                logger.info(f"Loading custom model: {self.model_path}")
-                self.model = YOLO(self.model_path)
+                logger.info(f"Loading ONNX model: {self.model_path}")
             else:
-                # 기본 YOLOv8n 모델 사용 (PPE 전용 모델이 없을 경우)
-                logger.warning(f"Model not found at {self.model_path}, using default yolov8n")
-                self.model = YOLO('yolov8n.pt')
+                # 기본 모델 경로 시도
+                default_paths = [
+                    '/opt/ppe-detector/models/yolov8n.onnx',
+                    './models/yolov8n.onnx',
+                    'yolov8n.onnx'
+                ]
+                for path in default_paths:
+                    if os.path.exists(path):
+                        self.model_path = path
+                        break
 
-            # 디바이스 설정
-            if self.device.startswith('cuda'):
-                import torch
-                if torch.cuda.is_available():
-                    self.model.to(self.device)
-                    logger.info(f"Using CUDA device: {self.device}")
-                else:
-                    logger.warning("CUDA not available, falling back to CPU")
-                    self.device = 'cpu'
+                if not self.model_path or not os.path.exists(self.model_path):
+                    raise FileNotFoundError(
+                        f"ONNX 모델을 찾을 수 없습니다. "
+                        f"모델 경로: {self.model_path}\n"
+                        f"모델 다운로드: python3 src/models/download_model.py --model yolov8n"
+                    )
+
+            # OpenCV DNN으로 ONNX 모델 로드
+            self.net = cv2.dnn.readNetFromONNX(self.model_path)
+
+            # 백엔드 설정
+            if self.use_cuda and cv2.cuda.getCudaEnabledDeviceCount() > 0:
+                logger.info("Using CUDA backend")
+                self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
             else:
-                logger.info("Using CPU for inference")
+                logger.info("Using CPU backend")
+                self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+
+            # 출력 레이어 이름 가져오기
+            self.output_layers = self.net.getUnconnectedOutLayersNames()
 
             # 워밍업 (첫 추론 속도 향상)
-            dummy_input = np.zeros((640, 640, 3), dtype=np.uint8)
-            self.model.predict(dummy_input, verbose=False)
+            logger.info("Warming up model...")
+            dummy_input = np.zeros((self.input_size[1], self.input_size[0], 3), dtype=np.uint8)
+            self._inference(dummy_input)
 
-            logger.info("Model loaded successfully")
+            logger.info(f"Model loaded successfully: {self.model_path}")
+            logger.info(f"Input size: {self.input_size}")
+            logger.info(f"Classes: {len(self.classes)}")
 
-        except ImportError:
-            logger.error("ultralytics package not installed. Run: pip install ultralytics")
-            raise
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
+
+    def _preprocess(self, frame: np.ndarray) -> Tuple[np.ndarray, float, float, int, int]:
+        """
+        이미지 전처리 (YOLOv8 형식)
+
+        Args:
+            frame: BGR 형식의 원본 이미지
+
+        Returns:
+            blob: 모델 입력용 blob
+            x_factor, y_factor: 좌표 변환을 위한 스케일 팩터
+            pad_w, pad_h: 패딩 크기
+        """
+        img_h, img_w = frame.shape[:2]
+        input_w, input_h = self.input_size
+
+        # 비율 유지하며 리사이즈
+        scale = min(input_w / img_w, input_h / img_h)
+        new_w = int(img_w * scale)
+        new_h = int(img_h * scale)
+
+        resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+        # 패딩 (letterbox)
+        pad_w = (input_w - new_w) // 2
+        pad_h = (input_h - new_h) // 2
+
+        padded = np.full((input_h, input_w, 3), 114, dtype=np.uint8)
+        padded[pad_h:pad_h + new_h, pad_w:pad_w + new_w] = resized
+
+        # BGR -> RGB, HWC -> CHW, normalize
+        blob = cv2.dnn.blobFromImage(
+            padded,
+            scalefactor=1/255.0,
+            size=(input_w, input_h),
+            mean=(0, 0, 0),
+            swapRB=True,
+            crop=False
+        )
+
+        # 좌표 변환을 위한 팩터
+        x_factor = img_w / (new_w)
+        y_factor = img_h / (new_h)
+
+        return blob, x_factor, y_factor, pad_w, pad_h, scale
+
+    def _inference(self, frame: np.ndarray) -> np.ndarray:
+        """
+        모델 추론 실행
+
+        Args:
+            frame: 원본 이미지
+
+        Returns:
+            outputs: 모델 출력
+        """
+        blob, x_factor, y_factor, pad_w, pad_h, scale = self._preprocess(frame)
+        self.net.setInput(blob)
+        outputs = self.net.forward(self.output_layers)
+        return outputs, x_factor, y_factor, pad_w, pad_h, scale
+
+    def _postprocess(
+        self,
+        outputs: np.ndarray,
+        x_factor: float,
+        y_factor: float,
+        pad_w: int,
+        pad_h: int,
+        scale: float,
+        img_w: int,
+        img_h: int
+    ) -> List[Dict]:
+        """
+        모델 출력 후처리 (YOLOv8 형식)
+
+        YOLOv8 출력 형식: [1, 84, 8400] 또는 [1, num_classes+4, num_detections]
+        - 84 = 4 (bbox) + 80 (classes) for COCO
+        - 각 열이 하나의 detection
+
+        Args:
+            outputs: 모델 출력
+            x_factor, y_factor: 좌표 스케일 팩터
+            pad_w, pad_h: 패딩 크기
+            scale: 리사이즈 스케일
+            img_w, img_h: 원본 이미지 크기
+
+        Returns:
+            List[Dict]: 감지 결과
+        """
+        detections = []
+
+        # YOLOv8 출력 처리
+        output = outputs[0]
+
+        # 출력 형태 확인 및 변환
+        if len(output.shape) == 3:
+            output = output[0]  # batch 차원 제거
+
+        # YOLOv8: [84, 8400] -> [8400, 84] 전치
+        if output.shape[0] < output.shape[1]:
+            output = output.T
+
+        num_detections = output.shape[0]
+        num_classes = output.shape[1] - 4  # bbox 4개 제외
+
+        boxes = []
+        confidences = []
+        class_ids = []
+
+        for i in range(num_detections):
+            # 클래스별 점수
+            class_scores = output[i, 4:]
+
+            # 최대 점수와 클래스 ID
+            max_score = np.max(class_scores)
+            class_id = np.argmax(class_scores)
+
+            if max_score < self.confidence_threshold:
+                continue
+
+            # 바운딩 박스 (cx, cy, w, h) -> (x1, y1, x2, y2)
+            cx, cy, w, h = output[i, :4]
+
+            # 패딩 제거 및 원본 좌표로 변환
+            x1 = int(((cx - w/2) - pad_w) / scale)
+            y1 = int(((cy - h/2) - pad_h) / scale)
+            x2 = int(((cx + w/2) - pad_w) / scale)
+            y2 = int(((cy + h/2) - pad_h) / scale)
+
+            # 경계 체크
+            x1 = max(0, min(x1, img_w))
+            y1 = max(0, min(y1, img_h))
+            x2 = max(0, min(x2, img_w))
+            y2 = max(0, min(y2, img_h))
+
+            # NMS용 데이터 저장
+            boxes.append([x1, y1, x2 - x1, y2 - y1])  # x, y, w, h 형식
+            confidences.append(float(max_score))
+            class_ids.append(int(class_id))
+
+        # Non-Maximum Suppression
+        if len(boxes) > 0:
+            indices = cv2.dnn.NMSBoxes(
+                boxes,
+                confidences,
+                self.confidence_threshold,
+                self.iou_threshold
+            )
+
+            # OpenCV 버전에 따른 indices 처리
+            if len(indices) > 0:
+                if isinstance(indices, np.ndarray):
+                    indices = indices.flatten()
+                else:
+                    indices = [i[0] if isinstance(i, (list, tuple)) else i for i in indices]
+
+                for i in indices:
+                    x, y, w, h = boxes[i]
+                    class_id = class_ids[i]
+
+                    # 클래스 이름
+                    if class_id in self.classes:
+                        class_name = self.classes[class_id]
+                    else:
+                        class_name = f'class_{class_id}'
+
+                    detections.append({
+                        'class': class_name,
+                        'class_id': class_id,
+                        'confidence': round(confidences[i], 3),
+                        'bbox': [x, y, x + w, y + h]  # x1, y1, x2, y2 형식
+                    })
+
+        return detections
 
     def detect(self, frame: np.ndarray) -> List[Dict]:
         """
@@ -114,66 +314,28 @@ class PPEDetector:
 
         Returns:
             List[Dict]: 감지 결과 목록
-                [
-                    {
-                        'class': 'hardhat',
-                        'class_id': 1,
-                        'confidence': 0.85,
-                        'bbox': [x1, y1, x2, y2]
-                    },
-                    ...
-                ]
         """
-        if self.model is None:
+        if self.net is None:
             logger.error("Model not loaded")
             return []
 
         try:
-            # YOLOv8 추론
-            results = self.model.predict(
-                frame,
-                conf=self.confidence_threshold,
-                iou=self.iou_threshold,
-                device=self.device,
-                verbose=False
+            img_h, img_w = frame.shape[:2]
+
+            # 추론
+            outputs, x_factor, y_factor, pad_w, pad_h, scale = self._inference(frame)
+
+            # 후처리
+            detections = self._postprocess(
+                outputs, x_factor, y_factor, pad_w, pad_h, scale, img_w, img_h
             )
-
-            detections = []
-
-            for result in results:
-                boxes = result.boxes
-                if boxes is None:
-                    continue
-
-                for i in range(len(boxes)):
-                    # 바운딩 박스
-                    bbox = boxes.xyxy[i].cpu().numpy().tolist()
-                    bbox = [int(x) for x in bbox]
-
-                    # 클래스 ID
-                    class_id = int(boxes.cls[i].cpu().numpy())
-
-                    # 신뢰도
-                    confidence = float(boxes.conf[i].cpu().numpy())
-
-                    # 클래스 이름 (커스텀 모델의 경우)
-                    if class_id in self.classes:
-                        class_name = self.classes[class_id]
-                    else:
-                        # 기본 YOLOv8 클래스 (COCO)
-                        class_name = result.names.get(class_id, f'class_{class_id}')
-
-                    detections.append({
-                        'class': class_name,
-                        'class_id': class_id,
-                        'confidence': round(confidence, 3),
-                        'bbox': bbox
-                    })
 
             return detections
 
         except Exception as e:
             logger.error(f"Detection error: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def detect_and_draw(self, frame: np.ndarray) -> tuple:
@@ -330,28 +492,48 @@ class PPEComplianceChecker:
 # 테스트 코드
 if __name__ == "__main__":
     import argparse
+    import time
 
-    parser = argparse.ArgumentParser(description='PPE Detector Test')
+    parser = argparse.ArgumentParser(description='PPE Detector Test (OpenCV DNN + ONNX)')
     parser.add_argument('--image', type=str, help='Test image path')
     parser.add_argument('--video', type=str, help='Test video path')
-    parser.add_argument('--camera', type=int, default=0, help='Camera index')
-    parser.add_argument('--model', type=str, default=None, help='Model path')
+    parser.add_argument('--camera', type=int, default=None, help='Camera index')
+    parser.add_argument('--model', type=str, default='yolov8n.onnx', help='ONNX model path')
     parser.add_argument('--conf', type=float, default=0.5, help='Confidence threshold')
+    parser.add_argument('--size', type=int, default=640, help='Input size')
     args = parser.parse_args()
 
+    print("=" * 50)
+    print("PPE Detector - OpenCV DNN + ONNX")
+    print("=" * 50)
+
     # 모델 초기화
-    detector = PPEDetector(
-        model_path=args.model,
-        confidence_threshold=args.conf
-    )
+    try:
+        detector = PPEDetector(
+            model_path=args.model,
+            confidence_threshold=args.conf,
+            input_size=(args.size, args.size)
+        )
+    except FileNotFoundError as e:
+        print(f"\n오류: {e}")
+        print("\n모델 다운로드 방법:")
+        print("  python3 src/models/download_model.py --model yolov8n")
+        exit(1)
 
     if args.image:
         # 이미지 테스트
         img = cv2.imread(args.image)
-        detections, result_img = detector.detect_and_draw(img)
+        if img is None:
+            print(f"이미지를 읽을 수 없습니다: {args.image}")
+            exit(1)
 
-        print(f"Detections: {detections}")
-        print(f"Summary: {detector.get_summary(detections)}")
+        start = time.time()
+        detections, result_img = detector.detect_and_draw(img)
+        elapsed = time.time() - start
+
+        print(f"\n추론 시간: {elapsed*1000:.1f}ms")
+        print(f"감지 결과: {detections}")
+        print(f"요약: {detector.get_summary(detections)}")
 
         cv2.imshow('PPE Detection Result', result_img)
         cv2.waitKey(0)
@@ -362,22 +544,48 @@ if __name__ == "__main__":
         source = args.video if args.video else args.camera
         cap = cv2.VideoCapture(source)
 
+        if not cap.isOpened():
+            print(f"비디오 소스를 열 수 없습니다: {source}")
+            exit(1)
+
+        frame_count = 0
+        total_time = 0
+
+        print("\n실시간 감지 시작... (q를 눌러 종료)")
+
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
 
+            start = time.time()
             detections, result_frame = detector.detect_and_draw(frame)
+            elapsed = time.time() - start
 
-            # FPS 표시
-            summary = detector.get_summary(detections)
-            cv2.putText(result_frame, f"Objects: {summary}", (10, 30),
+            frame_count += 1
+            total_time += elapsed
+
+            # FPS 및 정보 표시
+            fps = 1 / elapsed if elapsed > 0 else 0
+            avg_fps = frame_count / total_time if total_time > 0 else 0
+
+            info = f"FPS: {fps:.1f} (Avg: {avg_fps:.1f}) | Objects: {len(detections)}"
+            cv2.putText(result_frame, info, (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-            cv2.imshow('PPE Detection', result_frame)
+            cv2.imshow('PPE Detection (OpenCV DNN)', result_frame)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
         cap.release()
         cv2.destroyAllWindows()
+
+        print(f"\n평균 FPS: {avg_fps:.1f}")
+        print(f"총 프레임: {frame_count}")
+
+    else:
+        print("\n사용법:")
+        print("  이미지 테스트: python3 ppe_model.py --image test.jpg --model yolov8n.onnx")
+        print("  카메라 테스트: python3 ppe_model.py --camera 0 --model yolov8n.onnx")
+        print("  비디오 테스트: python3 ppe_model.py --video test.mp4 --model yolov8n.onnx")

@@ -20,11 +20,11 @@
 src/components/ppe_detector/
 ├── main.py              # 메인 실행 파일 (진입점)
 ├── rtsp_stream.py       # RTSP 스트림 처리 모듈
-├── ppe_model.py         # PPE 인식 모델 모듈
+├── ppe_model.py         # PPE 인식 모델 모듈 (OpenCV DNN + ONNX)
 ├── mqtt_publisher.py    # MQTT 메시지 발행 모듈
 ├── requirements.txt     # Python 의존성
 └── models/              # ML 모델 파일 (추후 추가)
-    └── ppe_yolov8n.pt
+    └── yolov8n.onnx
 ```
 
 ### 1.2 컴포넌트 아키텍처
@@ -61,8 +61,8 @@ src/components/ppe_detector/
 │                        ▼                                              │
 │                  ┌──────────┐                                         │
 │                  │ YOLOv8   │                                         │
+│                  │ ONNX     │                                         │
 │                  │ Model    │                                         │
-│                  │ (.pt)    │                                         │
 │                  └──────────┘                                         │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -172,33 +172,37 @@ rtsp://[username]:[password]@[ip_address]:[port]/[stream_path]
 포트 기본값: 554
 ```
 
-### 2.3 ppe_model.py - PPE 인식 모델
+### 2.3 ppe_model.py - PPE 인식 모델 (OpenCV DNN + ONNX)
+
+> **참고**: 라즈베리파이 Bookworm OS (Python 3.11)에서는 PyTorch가 지원되지 않아
+> OpenCV DNN 백엔드와 ONNX 모델을 사용합니다.
 
 ```python
 class PPEDetector:
-    """YOLOv8 기반 PPE 인식기"""
+    """OpenCV DNN 기반 ONNX 모델 PPE 인식기"""
 
-    def __init__(self, model_path: str, confidence_threshold: float = 0.5):
-        from ultralytics import YOLO
-        self.model = YOLO(model_path)
+    def __init__(self, model_path: str, confidence_threshold: float = 0.5,
+                 iou_threshold: float = 0.45, use_cuda: bool = False):
+        self.model_path = model_path
         self.confidence_threshold = confidence_threshold
+        self.iou_threshold = iou_threshold
+
+        # OpenCV DNN으로 ONNX 모델 로드
+        self.net = cv2.dnn.readNetFromONNX(model_path)
+        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
 
     def detect(self, frame: np.ndarray) -> List[Dict]:
         """프레임에서 PPE 감지"""
-        results = self.model.predict(
-            frame,
-            conf=self.confidence_threshold,
-            device='cpu'  # 라즈베리파이는 CPU 사용
-        )
+        # 전처리: letterbox 리사이즈
+        input_blob, ratio, (dw, dh) = self._preprocess(frame)
 
-        detections = []
-        for result in results:
-            for box in result.boxes:
-                detections.append({
-                    'class': self._get_class_name(box.cls),
-                    'confidence': float(box.conf),
-                    'bbox': box.xyxy.tolist()
-                })
+        # 추론 실행
+        self.net.setInput(input_blob)
+        outputs = self.net.forward()
+
+        # 후처리: NMS 적용 및 좌표 변환
+        detections = self._postprocess(outputs, frame.shape, ratio, dw, dh)
 
         return detections
 ```
@@ -248,65 +252,69 @@ class MQTTPublisher:
 
 ---
 
-## 3. PPE 인식 모델
+## 3. PPE 인식 모델 (ONNX 형식)
 
-### 3.1 모델 선택
+> **중요**: 라즈베리파이 Bookworm OS (Python 3.11)에서는 PyTorch/Ultralytics가 지원되지 않습니다.
+> 대신 OpenCV DNN 백엔드로 ONNX 형식의 모델을 사용합니다.
+
+### 3.1 모델 선택 (ONNX 형식)
 
 | 모델 | 크기 | 속도 (라즈베리파이5) | 정확도 |
 |------|------|---------------------|--------|
-| YOLOv8n | 6MB | ~200ms/프레임 | 중 |
-| YOLOv8s | 22MB | ~400ms/프레임 | 중상 |
-| YOLOv8m | 52MB | ~800ms/프레임 | 상 |
+| YOLOv8n.onnx | ~13MB | ~300ms/프레임 | 중 |
+| YOLOv8s.onnx | ~45MB | ~600ms/프레임 | 중상 |
+| YOLOv8m.onnx | ~104MB | ~1200ms/프레임 | 상 |
 
-**권장**: YOLOv8n (속도와 정확도 균형)
+**권장**: YOLOv8n.onnx (속도와 정확도 균형)
 
-### 3.2 사전 훈련 모델 사용
+### 3.2 사전 변환된 ONNX 모델 다운로드
 
-#### 옵션 A: 기본 COCO 모델 (테스트용)
+Ultralytics에서 제공하는 사전 변환된 ONNX 모델을 다운로드합니다:
+
+```bash
+# yolov8n ONNX 모델 다운로드
+curl -L https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.onnx \
+    -o /opt/ppe-detector/models/yolov8n.onnx
+```
+
+### 3.3 OpenCV DNN으로 ONNX 모델 로드
 
 ```python
+import cv2
+
+# ONNX 모델 로드
+net = cv2.dnn.readNetFromONNX('/opt/ppe-detector/models/yolov8n.onnx')
+
+# CPU 백엔드 설정 (라즈베리파이)
+net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+```
+
+### 3.4 커스텀 모델 ONNX 변환 (개발 PC에서)
+
+PPE 전용 모델을 훈련한 경우, 개발 PC에서 ONNX로 변환 후 라즈베리파이로 복사합니다:
+
+```python
+# 개발 PC에서 실행 (PyTorch/Ultralytics 설치 필요)
 from ultralytics import YOLO
 
-# 기본 YOLOv8n 로드 (person 클래스만 감지)
-model = YOLO('yolov8n.pt')
+# 훈련된 모델 로드
+model = YOLO('ppe_yolov8n.pt')
+
+# ONNX로 변환
+model.export(format='onnx', imgsz=640, simplify=True)
+# 결과: ppe_yolov8n.onnx 생성
 ```
 
-#### 옵션 B: PPE 전용 모델 사용
-
-Roboflow, Kaggle 등에서 PPE 데이터셋으로 훈련된 모델 사용:
-
-```python
-# 커스텀 PPE 모델 로드
-model = YOLO('/path/to/ppe_yolov8n.pt')
-```
-
-### 3.3 커스텀 모델 훈련 (선택사항)
-
-```python
-from ultralytics import YOLO
-
-# 사전 훈련 모델 로드
-model = YOLO('yolov8n.pt')
-
-# PPE 데이터셋으로 파인튜닝
-results = model.train(
-    data='ppe_dataset.yaml',  # 데이터셋 설정
-    epochs=100,
-    imgsz=640,
-    batch=16,
-    device='cpu'  # 또는 'cuda'
-)
-
-# 모델 저장
-model.export(format='pt')
-```
-
-### 3.4 모델 다운로드 스크립트
+### 3.5 모델 다운로드 스크립트
 
 ```bash
 # src/models/download_model.py 실행
 cd /opt/ppe-detector
 python3 src/models/download_model.py
+
+# 또는 특정 모델 지정
+python3 src/models/download_model.py --model yolov8s
 ```
 
 ---
@@ -402,7 +410,7 @@ source venv/bin/activate
 export RTSP_URL="rtsp://admin:password@192.168.1.100:554/stream"
 export CONFIDENCE_THRESHOLD="0.5"
 export ALERT_TOPIC="ppe/alerts"
-export MODEL_PATH="/opt/ppe-detector/models/ppe_yolov8n.pt"
+export MODEL_PATH="/opt/ppe-detector/models/yolov8n.onnx"
 
 # 테스트 실행
 python3 src/components/ppe_detector/main.py
@@ -461,8 +469,8 @@ mkdir -p build/ppe-detector
 # 소스 코드 복사
 cp -r src/components/ppe_detector/* build/ppe-detector/
 
-# 모델 파일 복사 (있으면)
-cp models/ppe_yolov8n.pt build/ppe-detector/models/ 2>/dev/null || true
+# 모델 파일 복사 (ONNX 형식)
+cp models/yolov8n.onnx build/ppe-detector/models/ 2>/dev/null || true
 
 # ZIP 생성
 cd build
@@ -513,7 +521,7 @@ aws greengrassv2 create-component-version \
 |------|------|------|
 | 메인 컨트롤러 | `main.py` | 전체 흐름 제어, 설정 관리 |
 | RTSP 리더 | `rtsp_stream.py` | 카메라 스트림 수신 |
-| PPE 모델 | `ppe_model.py` | YOLOv8 기반 인식 |
+| PPE 모델 | `ppe_model.py` | OpenCV DNN + ONNX 기반 인식 |
 | MQTT 퍼블리셔 | `mqtt_publisher.py` | AWS IoT Core 연동 |
 | 레시피 | `recipe.yaml` | Greengrass 배포 설정 |
 
